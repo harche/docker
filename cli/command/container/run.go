@@ -1,13 +1,16 @@
 package container
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http/httputil"
 	"os"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/net/context"
 
@@ -85,6 +88,51 @@ func runRun(dockerCli *command.DockerCli, flags *pflag.FlagSet, opts *runOptions
 	if err != nil {
 		reportError(stderr, cmdPath, err.Error(), true)
 		return cli.StatusError{StatusCode: 125}
+	}
+
+	if hostConfig.Isolation == "qemu" {
+		ctx, cancelFun := context.WithCancel(context.Background())
+
+		createResponse, err := createContainer(ctx, dockerCli, config, hostConfig, networkingConfig, hostConfig.ContainerIDFile, opts.name)
+		if err != nil {
+			reportError(stderr, cmdPath, err.Error(), true)
+			return runStartContainerErr(err)
+		}
+
+		//start the container
+		if err := client.ContainerStart(ctx, createResponse.ID, types.ContainerStartOptions{}); err != nil {
+			cancelFun()
+
+			reportError(stderr, cmdPath, err.Error(), false)
+			return runStartContainerErr(err)
+		}
+
+		qemuDirectory := fmt.Sprintf("/var/run/docker-qemu/%s/", createResponse.ID)
+		appConsoleSockName := qemuDirectory + "app.sock"
+
+		var conn net.Conn
+		conn, err = net.DialTimeout("unix", appConsoleSockName, time.Duration(10)*time.Second)
+
+		if err != nil {
+			fmt.Fprint(stderr, "failed to connect to ", appConsoleSockName, " ", err.Error(), "\n")
+			return nil
+		}
+
+		reader := bufio.NewReaderSize(conn, 256)
+
+		cout := make(chan string, 128)
+		go consoleReader(reader, cout)
+
+		for {
+			line, ok := <-cout
+			if ok {
+				fmt.Fprintln(stdout, line)
+			} else {
+				break
+			}
+		}
+
+		return nil
 	}
 
 	if hostConfig.AutoRemove && !hostConfig.RestartPolicy.IsNone() {
@@ -282,4 +330,35 @@ func runStartContainerErr(err error) error {
 	}
 
 	return statusError
+}
+
+// Move, Move, Move
+func consoleReader(reader *bufio.Reader, output chan string) {
+	line := []byte{}
+	cr := false
+	emit := false
+	for {
+
+		oneByte, err := reader.ReadByte()
+		if err != nil {
+			close(output)
+			return
+		}
+		switch oneByte {
+		case '\n':
+			emit = !cr
+			cr = false
+		case '\r':
+			emit = true
+			cr = true
+		default:
+			cr = false
+			line = append(line, oneByte)
+		}
+		if emit {
+			output <- string(line)
+			line = []byte{}
+			emit = false
+		}
+	}
 }

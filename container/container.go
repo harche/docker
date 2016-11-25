@@ -41,6 +41,7 @@ import (
 	"github.com/docker/libnetwork/options"
 	"github.com/docker/libnetwork/types"
 	"github.com/opencontainers/runc/libcontainer/label"
+	libvirtgo "github.com/rgbkrk/libvirt-go"
 )
 
 const configFileName = "config.v2.json"
@@ -60,6 +61,18 @@ type DetachError struct{}
 
 func (DetachError) Error() string {
 	return "detached from container"
+}
+
+// Required for Qemu isolated container.
+type LibvirtDriver struct {
+	sync.Mutex
+	conn libvirtgo.VirConnection
+}
+
+type LibvirtContext struct {
+	driver    *LibvirtDriver
+	container *Container
+	domain    *libvirtgo.VirDomain
 }
 
 // CommonContainer holds the fields for a container which are
@@ -82,6 +95,10 @@ type CommonContainer struct {
 	LogPath         string
 	Name            string
 	Driver          string
+	//TODO- this struct is for fields applicable across platforms. Should the IsolatedContainerContext
+	//be in some other platform specific struct - api/types/config.go?`
+	// Context for isolated container
+	IsolatedContainerContext libcontainerd.IcContext `json:"-"`
 	// MountLabel contains the options for the 'mount' command
 	MountLabel             string
 	ProcessLabel           string

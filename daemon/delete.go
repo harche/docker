@@ -42,6 +42,15 @@ func (daemon *Daemon) ContainerRm(name string, config *types.ContainerRmConfig) 
 		return daemon.rmLink(container, name)
 	}
 
+	if container.HostConfig.Isolation == "qemu" {
+		container.IsolatedContainerContext.Shutdown()
+		container.IsolatedContainerContext.Undefine()
+		err := os.RemoveAll(container.Config.QemuDirectory)
+		if err != nil {
+			return err
+		}
+	}
+
 	err = daemon.cleanupContainer(container, config.ForceRemove, config.RemoveVolume)
 	containerActions.WithValues("delete").UpdateSince(start)
 

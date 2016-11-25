@@ -91,6 +91,11 @@ func (daemon *Daemon) killWithSignal(container *container.Container, sig int) er
 		return nil
 	}
 
+	if container.HostConfig.Isolation == "qemu" {
+		daemon.containerd.KillVMContainer(container.ID)
+		container.IsolatedContainerContext.Shutdown()
+
+        } else {
 	if err := daemon.kill(container, sig); err != nil {
 		err = fmt.Errorf("Cannot kill container %s: %s", container.ID, err)
 		// if container or process not exists, ignore the error
@@ -100,7 +105,7 @@ func (daemon *Daemon) killWithSignal(container *container.Container, sig int) er
 		} else {
 			return err
 		}
-	}
+	}}
 
 	attributes := map[string]string{
 		"signal": fmt.Sprintf("%d", sig),

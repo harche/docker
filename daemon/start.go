@@ -161,7 +161,8 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 		checkpointDir = container.CheckpointDir()
 	}
 
-	if err := daemon.containerd.Create(container.ID, checkpoint, checkpointDir, *spec, container.InitializeStdio, createOptions...); err != nil {
+	if err := daemon.containerd.Create(
+                    container.ID, checkpoint, checkpointDir, *spec, container.InitializeStdio, container.IsolatedContainerContext, createOptions...); err != nil {
 		errDesc := grpc.ErrorDesc(err)
 		contains := func(s1, s2 string) bool {
 			return strings.Contains(strings.ToLower(s1), s2)

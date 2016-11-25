@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -154,6 +155,26 @@ func (daemon *Daemon) create(params types.ContainerCreateConfig, managed bool) (
 	if err := daemon.Register(container); err != nil {
 		return nil, err
 	}
+
+	if params.HostConfig.Isolation == "qemu" {
+		qemuDirectory := fmt.Sprintf("/var/run/docker-qemu/%s", container.ID)
+		err := os.MkdirAll(qemuDirectory, 0700)
+
+		if err != nil {
+			return nil, fmt.Errorf("Could not create directory /var/run/docker-qemu/%s : %s", container.ID, err)
+		}
+
+		container.Config.QemuDirectory = qemuDirectory
+
+		logrus.Infof("QEMU directory for isolated container is : %s", container.Config.QemuDirectory)
+
+		ld := container.InitDriver()
+		lc := ld.InitContext(container)
+		container.IsolatedContainerContext = lc
+
+		return container, nil
+	}
+
 	daemon.LogContainerEvent(container, "create")
 	return container, nil
 }

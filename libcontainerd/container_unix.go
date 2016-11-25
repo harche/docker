@@ -4,6 +4,7 @@ package libcontainerd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -16,12 +17,31 @@ import (
 	containerd "github.com/docker/containerd/api/grpc/types"
 	"github.com/docker/docker/pkg/ioutils"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	libvirtgo "github.com/rgbkrk/libvirt-go"
 	"github.com/tonistiigi/fifo"
 	"golang.org/x/net/context"
 )
 
+// Required for isolated container.
+type IcContext interface {
+	CreateSeedImage(seedDirectory string) (string, error)
+	CreateDeltaDiskImage(deltaDiskDirectory, diskPath string) (string, error)
+	DomainXml() (string, error)
+	GetDomain() *libvirtgo.VirDomain
+	GetQemuDirectory() string
+	CreateDomain()
+	Launch()
+	Shutdown()
+	Undefine()
+	Close()
+	Pause(pause bool) error
+}
+
 type container struct {
 	containerCommon
+
+	// Domain for isolated container
+	isolatedContainerContext IcContext
 
 	// Platform specific fields are below here.
 	pauseMonitor
@@ -88,6 +108,65 @@ func (ctr *container) spec() (*specs.Spec, error) {
 		return nil, err
 	}
 	return &spec, nil
+}
+
+func (ctr *container) startQemu() error {
+	spec, err := ctr.spec()
+	if err != nil {
+		return nil
+	}
+	logrus.Debugf("The container spec is: %s", spec)
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctr.client.appendContainer(ctr)
+
+	if ctr.isolatedContainerContext != nil {
+		seedImageLocation, err := ctr.isolatedContainerContext.CreateSeedImage(ctr.isolatedContainerContext.GetQemuDirectory())
+		if err != nil {
+			return fmt.Errorf("Could not create seed image : %s", err)
+		}
+
+		logrus.Infof("Seed image location: %s", seedImageLocation)
+		ctr.isolatedContainerContext.CreateDomain()
+		ctr.isolatedContainerContext.Launch()
+	} else {
+		return fmt.Errorf("container.isolatedContainerContext is not set to launch isolated container")
+	}
+
+	go func(ctr *container) {
+		active := true
+
+		// Wait for few seconds so that VM does not start, the isolated container should not be shown as running.
+		time.Sleep(3 * time.Second)
+
+		domain := ctr.isolatedContainerContext.GetDomain()
+
+		if domain != nil {
+			for active {
+				active, err = domain.IsActive()
+				if err != nil {
+					logrus.Error("Could not check if the domain is active: ", err)
+					active = false
+				}
+				// Do Nothing
+			}
+		}
+
+		if err == nil {
+			logrus.Infof("The isolated container %s is no more running", ctr.containerID)
+			ctr.client.backend.StateChanged(ctr.containerID, StateInfo{
+				CommonStateInfo: CommonStateInfo{
+					State: StateExit,
+				}})
+		}
+	}(ctr)
+
+	return ctr.client.backend.StateChanged(ctr.containerID, StateInfo{
+		CommonStateInfo: CommonStateInfo{
+			State: StateStart,
+		}})
 }
 
 func (ctr *container) start(checkpoint string, checkpointDir string, attachStdio StdioCallback) error {
